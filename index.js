@@ -8,13 +8,13 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// ===== SIRF HJ-HACKER BRANDING =====
+// ===== ONLY HJ-HACKER BRANDING =====
 const BRANDING = {
   developed_by: "HJ-HACKER",
   whatsapp_channel: "https://whatsapp.com/channel/0029VbAaNJ6C1FuB0mIAx93M",
   main_site: "https://hamza-jutt-7d6.pages.dev/",
   note: "🔥 Follow HJ-HACKER for more tools, apps & tech updates!",
-  version: "1.0.0"
+  version: "2.0.0"
 };
 
 // ============================================================
@@ -22,8 +22,8 @@ const BRANDING = {
 // ============================================================
 
 app.get('/api/sim', async (req, res) => {
-  const { q, number, search } = req.query;
-  const query = q || number || search;
+  const { q, number, search, num } = req.query;
+  const query = q || number || search || num;
 
   if (!query) {
     return res.status(400).json({
@@ -32,7 +32,8 @@ app.get('/api/sim', async (req, res) => {
       usage: {
         by_phone: '/api/sim?q=03001234567',
         by_number: '/api/sim?number=03001234567',
-        by_search: '/api/sim?search=03001234567'
+        by_search: '/api/sim?search=03001234567',
+        by_num: '/api/sim?num=03001234567'
       },
       credits: BRANDING,
       example: '/api/sim?q=03217558607'
@@ -43,8 +44,8 @@ app.get('/api/sim', async (req, res) => {
     const cleanQuery = query.toString().trim();
     console.log('📱 SIM Search:', cleanQuery);
 
-    // ===== FAIZANKHICHI API CALL (SIRF DATA KE LIYE) =====
-    const apiUrl = `https://simdata.faizankhichi.me/?search=${encodeURIComponent(cleanQuery)}`;
+    // ===== FTGM API CALL (ONLY FOR DATA - CREDITS REMOVED) =====
+    const apiUrl = `https://ftgm-stock.vercel.app/api/sim?num=${encodeURIComponent(cleanQuery)}`;
     console.log('🔄 Fetching data...');
 
     const response = await axios.get(apiUrl, {
@@ -59,7 +60,7 @@ app.get('/api/sim', async (req, res) => {
     console.log('✅ Data received');
 
     // ===== CHECK IF DATA FOUND =====
-    if (!data.ok || !data.data || data.data.length === 0) {
+    if (!data.success || !data.data || data.data.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'No records found for this number',
@@ -68,22 +69,22 @@ app.get('/api/sim', async (req, res) => {
       });
     }
 
-    // ===== FORMAT RESPONSE - SIRF HJ-HACKER =====
+    // ===== FORMAT RESPONSE - ONLY HJ-HACKER =====
     const records = data.data.map(record => ({
-      full_name: record.nam || 'N/A',
-      phone: record.nbr || 'N/A',
-      cnic: record.cni || 'N/A',
-      address: record.adr || 'N/A'
+      full_name: record.name || 'N/A',
+      phone: record.number || 'N/A',
+      cnic: record.cnic || 'N/A',
+      address: record.address || 'N/A'
     }));
 
     const firstRecord = records[0] || {};
 
+    // ===== RESPONSE WITH ONLY HJ-HACKER BRANDING =====
     res.json({
       credits: BRANDING,
       status: true,
       results: {
         status: true,
-        source: "HJ-HACKER SIM Database API", // ✅ SIRF HJ-HACKER
         data: {
           search_type: 'phone',
           records_count: records.length,
@@ -126,7 +127,7 @@ app.get('/api/sim', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     name: "HJ-HACKER SIM Database API",
-    version: "1.0.0",
+    version: "2.0.0",
     status: "🟢 Online",
     developer: "HJ-HACKER",
     website: "https://hamza-jutt-7d6.pages.dev/",
