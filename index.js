@@ -45,7 +45,7 @@ app.get('/api/sim', async (req, res) => {
     console.log('📱 SIM Search:', cleanQuery);
 
     // ===== FTGM API CALL (ONLY FOR DATA - CREDITS REMOVED) =====
-    const apiUrl = `https://ftgm-stock.vercel.app/api/sim?num=${encodeURIComponent(cleanQuery)}`;
+    const apiUrl = `https://ftgm-simdb-api.vercel.app/api/sim?num=${encodeURIComponent(cleanQuery)}`;
     console.log('🔄 Fetching data...');
 
     const response = await axios.get(apiUrl, {
