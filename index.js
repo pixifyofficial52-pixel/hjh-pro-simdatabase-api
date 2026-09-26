@@ -8,7 +8,9 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// ===== ONLY HJ-HACKER BRANDING =====
+// ============================================================
+// ===== HJH-HACKER BRANDING =====
+// ============================================================
 const BRANDING = {
   developed_by: "HJ-HACKER",
   whatsapp_channel: "https://whatsapp.com/channel/0029VbAaNJ6C1FuB0mIAx93M",
@@ -18,69 +20,203 @@ const BRANDING = {
 };
 
 // ============================================================
+// ===== API ENDPOINTS =====
+// ============================================================
+
+// PRIMARY SIM DB — aapka existing API (num= parameter)
+const SIMDB_API = 'https://ftgm-simdb-api.vercel.app/api/sim?num=';
+
+// FALLBACK — Truecaller
+const TRUECALLER_API = 'https://faisal-ali-truecaller.ftgmhacks.workers.dev/';
+const TRUECALLER_KEY = 'pak-digital.store';
+
+// ============================================================
 // ===== PRIVATE / BLOCKED NUMBERS =====
 // ===== In numbers ka data kisi bhi source se return nahi hoga =====
 // ============================================================
 const BLOCKED_NUMBERS = [
   '923266571331',
-  '03035481601'
+  '923035481601'
 ];
 
-// Normalize number: sab formats ko ek shape mein laao
-// 03035481601  -> 03035481601
-// 923266571331 -> 03266571331
-function normalizeNumber(num) {
-  if (!num) return '';
-  let n = num.toString().replace(/\D/g, '');
+// ============================================================
+// ===== HELPER FUNCTIONS =====
+// ============================================================
 
-  // 92xxxxxxxxxx -> 0xxxxxxxxxx
-  if (n.startsWith('92') && n.length === 12) {
-    n = '0' + n.slice(2);
+/**
+ * Normalize number to 923XXXXXXXXX format (12 digits, international)
+ */
+function normalizeToIntl(number) {
+  if (!number) return '';
+  let n = number.toString().replace(/\D/g, '');
+  
+  if (n.length === 11 && n.startsWith('03')) {
+    n = '92' + n.slice(1);
+  } else if (n.length === 10 && n.startsWith('3')) {
+    n = '92' + n;
   }
-  // 3xxxxxxxxx (10 digits, missing 0) -> 03xxxxxxxxx
-  else if (n.length === 10 && n.startsWith('3')) {
-    n = '0' + n;
-  }
+  
   return n;
 }
 
-// Check karo ke number blocked hai ya nahi (dono formats compare karo)
-function isBlocked(num) {
-  const normalized = normalizeNumber(num);
-  const raw = num.toString().replace(/\D/g, '');
+/**
+ * Normalize number to 03XXXXXXXXX format (local, for SIM DB)
+ */
+function normalizeToLocal(number) {
+  const intl = normalizeToIntl(number);
+  if (intl.length === 12 && intl.startsWith('92')) {
+    return '0' + intl.slice(2);
+  }
+  return intl;
+}
 
-  return BLOCKED_NUMBERS.some(blocked => {
-    const bNorm = normalizeNumber(blocked);
-    const bRaw = blocked.replace(/\D/g, '');
-    return (
-      normalized === bNorm ||
-      raw === bRaw ||
-      normalized === bRaw ||
-      raw === bNorm
-    );
-  });
+/**
+ * Check if number is blocked (privacy)
+ */
+function isBlocked(number) {
+  const intl = normalizeToIntl(number);
+  return BLOCKED_NUMBERS.some(b => normalizeToIntl(b) === intl);
+}
+
+/**
+ * Detect search type
+ * Phone: 12 digits (923XXXXXXXXX)
+ * CNIC: 13 digits
+ */
+function detectSearchType(query) {
+  const clean = query.toString().replace(/\D/g, '');
+  
+  if (clean.length === 12 && clean.startsWith('92')) {
+    return { type: 'phone', value: clean };
+  }
+  
+  if (clean.length === 13) {
+    return { type: 'cnic', value: clean };
+  }
+  
+  return null;
 }
 
 // ============================================================
-// ===== TRUECALLER FALLBACK =====
+// ===== SIM DATABASE FETCH (ftgm-simdb-api) =====
+// Response format: { status: "success", records: [...] }
 // ============================================================
-async function fetchFromTruecaller(number) {
+async function fetchFromSimDb(phoneNumber) {
   try {
-    // Truecaller API ko international format chahiye (92xxxxxxxxxx)
-    const normalized = normalizeNumber(number); // 03xxxxxxxxx
-    const intlFormat = '92' + normalized.slice(1); // 92xxxxxxxxxx
-
-    const url = `https://faisal-ali-truecaller.ftgmhacks.workers.dev/?key=pak-digital.store&number=${intlFormat}`;
-    console.log('📞 Trying Truecaller:', url);
-
+    // ftgm-simdb-api needs local format (03XXXXXXXXX)
+    const localFormat = normalizeToLocal(phoneNumber);
+    const url = SIMDB_API + encodeURIComponent(localFormat);
+    
+    console.log('🔄 SIM DB:', url);
+    
     const response = await axios.get(url, {
-      headers: { 'Accept': 'application/json' },
-      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json'
+      },
+      timeout: 20000,
       validateStatus: () => true
     });
+    
+    const data = response.data;
+    console.log('📥 SIM DB status:', data?.status, '| records:', data?.count || (data?.records?.length || 0));
+    
+    // ===== ftgm-simdb-api STRUCTURE =====
+    // { status: "success", records: [{ name, mobile, cnic, address, network }] }
+    if (
+      data &&
+      (data.status === 'success' || data.status === true) &&
+      Array.isArray(data.records) &&
+      data.records.length > 0
+    ) {
+      const records = data.records.map(r => ({
+        full_name: r.name || r.full_name || 'Not Available',
+        phone: r.mobile || r.number || r.phone || 'Not Available',
+        cnic: r.cnic || 'Not Available',
+        address: r.address || 'Not Available',
+        network: r.network || 'Not Available'
+      }));
+      
+      return records;
+    }
+    
+    // ===== Agar aapki koi nayi API { results: { data: { records } } } format use kare =====
+    if (
+      data &&
+      (data.status === true || data.success === true) &&
+      data.results &&
+      data.results.data &&
+      Array.isArray(data.results.data.records) &&
+      data.results.data.records.length > 0
+    ) {
+      const records = data.results.data.records.map(r => ({
+        full_name: r.full_name || r.name || 'Not Available',
+        phone: r.phone || r.mobile || r.number || 'Not Available',
+        cnic: r.cnic || 'Not Available',
+        address: r.address || 'Not Available',
+        network: r.network || 'Not Available'
+      }));
+      
+      return records;
+    }
+    
+    return null;
+  } catch (err) {
+    console.log('⚠️ SIM DB failed:', err.message);
+    return null;
+  }
+}
 
-    console.log('📥 Truecaller raw:', JSON.stringify(response.data).slice(0, 500));
-    return response.data;
+// ============================================================
+// ===== TRUECALLER FETCH (fallback) =====
+// Response format: { status: "success", data: { name, sim, success } }
+// ============================================================
+async function fetchFromTruecaller(phoneNumber) {
+  try {
+    const intlFormat = normalizeToIntl(phoneNumber);
+    const url = `${TRUECALLER_API}?key=${encodeURIComponent(TRUECALLER_KEY)}&number=${encodeURIComponent(intlFormat)}`;
+    
+    console.log('📞 Truecaller:', url);
+    
+    const response = await axios.get(url, {
+      headers: { 'Accept': 'application/json' },
+      timeout: 20000,
+      validateStatus: () => true
+    });
+    
+    const data = response.data;
+    console.log('📥 Truecaller raw:', JSON.stringify(data).slice(0, 300));
+    
+    // ===== Truecaller structure =====
+    // { status: "success", data: { name, sim, success: true } }
+    if (
+      data &&
+      data.status === 'success' &&
+      data.data &&
+      data.data.success === true
+    ) {
+      const tc = data.data;
+      const callerName = (tc.name || '').trim();
+      
+      // Reject "Unknown" / empty names
+      if (!callerName || /^(unknown|n\/a|not available)$/i.test(callerName)) {
+        console.log('⚠️ Truecaller returned Unknown name');
+        return null;
+      }
+      
+      // Clean SIM info
+      const simInfo = (tc.sim && !/unknown/i.test(tc.sim)) ? tc.sim : 'Not Available';
+      
+      return [{
+        full_name: callerName,
+        phone: intlFormat,
+        cnic: 'Not Available',
+        address: 'Not Available',
+        network: simInfo
+      }];
+    }
+    
+    return null;
   } catch (err) {
     console.log('⚠️ Truecaller failed:', err.message);
     return null;
@@ -88,181 +224,108 @@ async function fetchFromTruecaller(number) {
 }
 
 // ============================================================
-// ===== SIM DATABASE API =====
+// ===== MAIN API ENDPOINT =====
 // ============================================================
 app.get('/api/sim', async (req, res) => {
   const { q, number, search, num } = req.query;
   const query = q || number || search || num;
-
+  
   if (!query) {
     return res.status(400).json({
       success: false,
       error: 'Search parameter is required',
       usage: {
-        by_phone: '/api/sim?q=03001234567',
-        by_number: '/api/sim?number=03001234567',
-        by_search: '/api/sim?search=03001234567',
-        by_num: '/api/sim?num=03001234567'
+        phone: '/api/sim?q=923XXXXXXXXX',
+        cnic: '/api/sim?q=13-digit-cnic'
       },
-      credits: BRANDING,
-      example: '/api/sim?q=03217558607'
+      credits: BRANDING
     });
   }
-
+  
   const cleanQuery = query.toString().trim();
-
-  // ===== PRIVACY CHECK — blocked number? =====
-  if (isBlocked(cleanQuery)) {
-    console.log('🔒 Blocked number requested:', cleanQuery);
+  const detected = detectSearchType(cleanQuery);
+  
+  if (!detected) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid format. Use 923XXXXXXXXX (phone) or 13-digit CNIC',
+      credits: BRANDING
+    });
+  }
+  
+  console.log('📱 Query:', detected.type, detected.value);
+  
+  // ===== PRIVACY CHECK =====
+  if (detected.type === 'phone' && isBlocked(detected.value)) {
+    console.log('🔒 Blocked number requested');
     return res.status(403).json({
       success: false,
       error: 'This number is private. Data access is not allowed.',
       credits: BRANDING
     });
   }
-
-  console.log('📱 SIM Search:', cleanQuery);
-
+  
   try {
-    // ===== STEP 1: SIM DATABASE TRY KARO =====
-    const apiUrl = `https://ftgm-simdb-api.vercel.app/api/sim?num=${encodeURIComponent(cleanQuery)}`;
-    console.log('🔄 Fetching SIM DB:', apiUrl);
-
-    const response = await axios.get(apiUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json'
-      },
-      timeout: 15000,
-      validateStatus: () => true
-    });
-
-    const data = response.data;
-    console.log('📥 SIM DB status:', data.status, '| records:', data.count);
-
-    // ===== CHECK: SIM DB MEIN DATA MILA? =====
-    const simDbHasData =
-      (data.status === 'success' || data.status === true || data.success === true) &&
-      Array.isArray(data.records) &&
-      data.records.length > 0;
-
-    if (simDbHasData) {
-      // ===== NORMALIZE SIM DB RECORDS =====
-      const records = data.records.map(r => ({
-        full_name: r.name || 'N/A',
-        phone: r.mobile || r.number || r.phone || 'N/A',
-        cnic: r.cnic || 'N/A',
-        address: r.address || 'N/A',
-        network: r.network || 'N/A'
-      }));
-
-      const firstRecord = records[0];
-
-      return res.json({
-        credits: BRANDING,
-        status: true,
-        success: true,
-        source: 'sim_database',
-        results: {
-          status: true,
-          data: {
-            search_type: 'phone',
-            records_count: records.length,
-            queried_number: cleanQuery,
-            records: records,
-            summary: {
-              name: firstRecord.full_name,
-              phone: firstRecord.phone,
-              cnic: firstRecord.cnic,
-              address: firstRecord.address,
-              network: firstRecord.network
-            }
-          },
-          timestamp: new Date().toISOString()
-        }
-      });
+    // ===== STEP 1: SIM DATABASE =====
+    let records = await fetchFromSimDb(detected.value);
+    let source = null;
+    
+    if (records && records.length > 0) {
+      source = 'sim_database';
     }
-
-    // ===== STEP 2: SIM DB MEIN NAHI MILA → TRUECALLER TRY KARO =====
-    console.log('⚠️ SIM DB empty, falling back to Truecaller...');
-    const tcData = await fetchFromTruecaller(cleanQuery);
-
-    // ===== TRUECALLER RESPONSE PARSE — actual structure =====
-    // {
-    //   status: "success",
-    //   data: { name, sim, success, timestamp, developer }
-    // }
-    if (
-      tcData &&
-      tcData.status === 'success' &&
-      tcData.data &&
-      tcData.data.success === true &&
-      tcData.data.name
-    ) {
-      const tc = tcData.data;
-
-      // "Unknown SIM" / "Unknown" ko N/A treat karo
-      const simInfo = tc.sim && !/unknown/i.test(tc.sim) ? tc.sim : 'N/A';
-      const callerName =
-        tc.name && !/unknown/i.test(tc.name) ? tc.name : 'N/A';
-
-      // Agar name bhi N/A hai to 404
-      if (callerName === 'N/A') {
-        return res.status(404).json({
-          success: false,
-          error: 'No records found for this number in any database',
-          credits: BRANDING,
-          number: cleanQuery,
-          tried: ['sim_database', 'truecaller']
-        });
+    
+    // ===== STEP 2: TRUECALLER FALLBACK (sirf phone) =====
+    if ((!records || records.length === 0) && detected.type === 'phone') {
+      console.log('⚠️ SIM DB empty, trying Truecaller...');
+      records = await fetchFromTruecaller(detected.value);
+      if (records && records.length > 0) {
+        source = 'truecaller';
       }
-
-      const tcRecord = {
-        full_name: callerName,
-        phone: cleanQuery,
-        cnic: 'N/A',           // Truecaller CNIC nahi deta
-        address: 'N/A',        // Truecaller address nahi deta
-        network: simInfo       // "sim" field = network/carrier info
-      };
-
-      return res.json({
+    }
+    
+    // ===== DONO FAIL =====
+    if (!records || records.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No records found in any database',
         credits: BRANDING,
-        status: true,
-        success: true,
-        source: 'truecaller',
-        results: {
-          status: true,
-          data: {
-            search_type: 'phone',
-            records_count: 1,
-            queried_number: cleanQuery,
-            records: [tcRecord],
-            summary: tcRecord
-          },
-          timestamp: new Date().toISOString()
-        }
+        query: detected.value,
+        tried: ['sim_database', 'truecaller']
       });
     }
-
-    // ===== DONO FAIL → 404 =====
-    return res.status(404).json({
-      success: false,
-      error: 'No records found for this number in any database',
+    
+    // ===== SUCCESS =====
+    const firstRecord = records[0];
+    
+    return res.json({
       credits: BRANDING,
-      number: cleanQuery,
-      tried: ['sim_database', 'truecaller']
+      status: true,
+      success: true,
+      source: source,
+      results: {
+        status: true,
+        data: {
+          search_type: detected.type,
+          records_count: records.length,
+          queried_number: detected.value,
+          records: records,
+          summary: {
+            name: firstRecord.full_name,
+            phone: firstRecord.phone,
+            cnic: firstRecord.cnic,
+            address: firstRecord.address,
+            network: firstRecord.network
+          }
+        },
+        timestamp: new Date().toISOString()
+      }
     });
-
+    
   } catch (error) {
     console.error('❌ Error:', error.message);
-
-    const errorMessage = error.code === 'ECONNABORTED'
-      ? 'Request timeout. The server is taking too long to respond.'
-      : 'Failed to fetch records. Please try again later.';
-
     return res.status(500).json({
       success: false,
-      error: errorMessage,
+      error: 'Failed to fetch records. Please try again later.',
       credits: BRANDING,
       debug: {
         number: cleanQuery,
@@ -277,18 +340,20 @@ app.get('/api/sim', async (req, res) => {
 // ============================================================
 app.get('/', (req, res) => {
   res.json({
-    name: "HJ-HACKER SIM Database API",
+    name: "HJH-HACKER SIM + Truecaller API",
     version: "2.0.0",
     status: "🟢 Online",
     developer: "HJ-HACKER",
     website: "https://hamza-jutt-7d6.pages.dev/",
     whatsapp: "https://whatsapp.com/channel/0029VbAaNJ6C1FuB0mIAx93M",
     endpoints: {
-      sim_database: "/api/sim?q=PHONE_NUMBER"
+      sim: "/api/sim?q=923XXXXXXXXX"
     },
     examples: {
-      phone: "/api/sim?q=03217558607"
-    }
+      phone: "/api/sim?q=923217558607",
+      cnic: "/api/sim?q=3520137181423"
+    },
+    flow: "SIM Database → Truecaller → No Data Found"
   });
 });
 
@@ -298,14 +363,8 @@ app.get('/', (req, res) => {
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    error: 'Endpoint not found. Available endpoint: /api/sim',
-    credits: BRANDING,
-    available_endpoints: {
-      sim: "/api/sim?q=PHONE_NUMBER"
-    },
-    examples: {
-      phone: "/api/sim?q=03217558607"
-    }
+    error: 'Endpoint not found. Available: /api/sim',
+    credits: BRANDING
   });
 });
 
@@ -313,11 +372,11 @@ app.use((req, res) => {
 // ===== START SERVER =====
 // ============================================================
 app.listen(PORT, () => {
-  console.log(`🚀 HJ-HACKER SIM Database API running on port ${PORT}`);
+  console.log(`🚀 HJH-HACKER API running on port ${PORT}`);
   console.log(`🌐 Website: https://hamza-jutt-7d6.pages.dev/`);
-  console.log(`📱 WhatsApp Channel: ${BRANDING.whatsapp_channel}`);
-  console.log(`\n🔒 Blocked numbers (privacy):`);
+  console.log(`📱 WhatsApp: ${BRANDING.whatsapp_channel}`);
+  console.log(`\n🔒 Blocked numbers:`);
   BLOCKED_NUMBERS.forEach(n => console.log(`  → ${n}`));
-  console.log(`\n📌 Endpoint:`);
-  console.log(`  → SIM DB + Truecaller:  /api/sim?q=03217558607`);
+  console.log(`\n📌 Endpoint: /api/sim?q=923XXXXXXXXX`);
+  console.log(`\n🔄 Flow: SIM DB (ftgm) → Truecaller → 404`);
 });
